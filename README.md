@@ -1,6 +1,6 @@
 # Go Rat
-![GitHub stars](https://img.shields.io/github/stars/weessk/GoolangRat-C2?style=social)
-![Downloads](https://img.shields.io/github/downloads/weessk/GoolangRat-C2/total?style=social)
+![GitHub stars](https://img.shields.io/github/stars/nw8g/GoRat?style=social)
+![Downloads](https://img.shields.io/github/downloads/nw8g/GoRat/total?style=social)
 
 
 A lightweight RAT and stealer, cooked up in Go. It uses Discord for C2, keeping things fast and low-profile.
