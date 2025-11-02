@@ -1,5 +1,26 @@
 # changelog - latest stuff n hacks
 
+## v0.7.0 - good update!!
+
+### added
+
+*   **KEYLOGGER MODULE!!!!!!!** fully-featured and stealthy
+*   new commands `!keylogger <start/stop/status>` for total control and `!keys` / `!keylogs` to dump the captured shit.
+*   uses a custom **dependency-free ChaCha20** implementation to encrypt logs on the fly. Each session gets its own unique nonce so the crypto is solid.
+*   Logs are stashed stealthily in the Chrome cache dir (`%APPDATA%`) to avoid suspicion.
+
+### changed
+
+*   **MASSIVE CORE REFACTOR:** the bot connection logic was rewritten from the ground up, with aggressive auto-reconnect and exponential backoff to survive shitty internet connections
+*   **LOW-LEVEL SCREENSHOTS:** ditched the thirdparty screenshot library, ,ow uses direct **WinAPI (user32/gdi32)** calls, way stealthier and reduces the final binary size (btw the first time you run the command, sometimes it doesnt work, run it again and it will work)
+
+### notes
+
+*   this drop makes the agent way more stable and adds some serious info-gathering capabilities
+*   next on the list is probably proper process injection or a custom obfuscator to make AVs cry.
+
+---
+
 ## v0.6.0 control update
 
 ### added
