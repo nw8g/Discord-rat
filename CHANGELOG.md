@@ -1,5 +1,27 @@
 # changelog - latest stuff n hacks
 
+## v0.7.2 - bugfixs
+
+### fixed
+
+*   **screenshot stability:** no more random "failed to get bitmap bits" errors, added retry logic (3 attempts) + proper delays so `GetDIBits` doesnt shit itself
+*   **keylogger bugs:** fixed critical ChaCha20 counter issue that was corrupting logs after a few hours. now properly tracks block counter across sessions so decryption actually works lol
+*   **some keylogger bugs:** keys were sometimes logging twice cuz `GetAsyncKeyState` was spamming. added state tracking (`keyPressed[256]bool`) so each keypress only logs once
+   
+### changed
+
+*   **persistence:** ripped out the sketchy `selfInstall()` + `os.Exit(0)` shit that was causing race conditions, now just points persistence methods directly to current exe location. cleaner & less buggy
+*   keylogger polling reduced from 40ms to 10ms for better responsiveness
+*   screenshot now does double `GetDIBits` call (info first, then data) - more reliable on different systems
+
+### notes
+
+*   this is basically a "make shit actually work" update, no new features just fixing the broken stuff
+*   keylogger encryption is now rock solid, tested with 3+ hour sessions
+*   next update probably gonna focus on actual new features instead of fixing my own fuckups lol
+
+---
+
 ## v0.7.0 - good update!!
 
 ### added
